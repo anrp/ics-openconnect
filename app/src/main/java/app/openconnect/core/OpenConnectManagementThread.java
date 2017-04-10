@@ -46,6 +46,7 @@ import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.preference.PreferenceManager;
 import android.util.Base64;
+import android.util.Log;
 
 import org.infradead.libopenconnect.LibOpenConnect;
 
@@ -86,19 +87,24 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 
 	private boolean mRequestPause;
 	private boolean mRequestDisconnect;
+	private boolean mOnBoot;
 	private Object mMainloopLock = new Object();
 
-    public OpenConnectManagementThread(Context context, VpnProfile profile, OpenVpnService openVpnService) {
+    public OpenConnectManagementThread(Context context, VpnProfile profile, OpenVpnService openVpnService, boolean onBoot) {
     	mContext = context;
 		mProfile = profile;
 		mOpenVPNService = openVpnService;
 		mPrefs = mProfile.mPrefs;
 		mAppPrefs = PreferenceManager.getDefaultSharedPreferences(mContext);
+		mOnBoot = onBoot;
 	}
 
     private String getStringPref(final String key) {
     	return mPrefs.getString(key, "");
     }
+
+	private int getIntPref(final String key) {
+		return Integer.parseInt(getStringPref(key)); }
 
     private boolean getBoolPref(final String key) {
     	return mPrefs.getBoolean(key, false);
@@ -259,6 +265,20 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 
 		public void onProgress(int level, String msg) {
 			mOpenVPNService.log(level, "LIB: " + msg.trim());
+			if(msg.contains("CSTP connected")) {
+				VpnService.Builder b = getBuilder(false);
+				if(b != null) {
+					if(!replaceTunFd(b)) {
+						log("Cannot replace tun fd");
+						errorAlert();
+					}
+				} else {
+					if(!updateOCTunFD()) {
+						log("Cannot update tun fd");
+						errorAlert();
+					}
+				}
+			}
 		}
 
 		public void onProtectSocket(int fd) {
@@ -271,6 +291,67 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 			mOpenVPNService.setStats(stats);
 		}
 	}
+
+	private boolean replaceTunFd(VpnService.Builder b) {
+		ParcelFileDescriptor newFd = null;
+
+		try {
+			newFd = b.establish();
+		} catch (Exception e) {
+			log("Exception during establish(): " + e.getLocalizedMessage());
+			return false;
+		}
+
+		if (newFd != null) {
+			if (mParFD != null) {
+				try {
+					mParFD.close();
+				} catch (IOException e) {
+					log("Error during close of previous tun fd");
+				}
+			}
+			if (mParFDDup != null) {
+				try {
+					mParFDDup.close();
+				} catch (IOException e) {
+					log("Error during close of previous tun fd dup");
+				}
+			}
+			mParFD = newFd;
+		} else {
+			log("Error setting up replacement tunnel fd");
+			return false;
+		}
+
+		return updateOCTunFD();
+	}
+
+	private boolean updateOCTunFD() {
+		if (mParFDDup != null) {
+			try {
+				mParFDDup.close();
+			} catch (IOException e) {
+				log("Error during close of previous tun fd dup");
+			}
+		}
+		
+		try {
+			mParFDDup = mParFD.dup();
+		} catch (IOException e) {
+			log("Exception getting dup of tun fd");
+			errorAlert();
+			return false;
+		}
+		
+		if(mOC.setupTunFD(mParFDDup.getFd()) != 0) {
+			log("Error re-setting up tunnel fd");
+			errorAlert();
+			return false;
+		}
+
+		return true;
+	}
+
 
 	@Override
 	public void run() {
@@ -287,16 +368,73 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 			log("error running root commands: " + e.getLocalizedMessage());
 		}
 
-		if (!runVPN()) {
-			log("VPN terminated with errors");
-		}
-		setState(STATE_DISCONNECTED);
+		connectionRetry = 0;
+		connectionRetryMax = getIntPref("autoreconnect");
 
-		synchronized (mMainloopLock) {
-			mOC.destroy();
-			mOC = null;
+		log("VPN starting, retry count=" + connectionRetry + "/" + connectionRetryMax);
+
+		boolean firstConnectionFailed = false;
+
+		if(mOnBoot) {
+			silenceFatalError = true;
+		} else {
+			silenceFatalError = false;
 		}
-		UserDialog.clearDeferredPrefs();
+
+		while(!firstConnectionFailed && (connectionRetryMax == -1 || connectionRetry <= connectionRetryMax)) {
+			synchronized (mMainloopLock) {
+				if (mRequestDisconnect) break;
+			}
+
+			if(runVPN() == false && silenceFatalError == false) firstConnectionFailed = true;
+			silenceFatalError = true;
+
+			if(firstConnectionFailed) {
+				if(mOnBoot) {
+					log("Not giving up as first VPN attempt was triggered by boot");
+					firstConnectionFailed = false;
+				} else {
+					log("First VPN connection attempt failed, aborting");
+				}
+			} else {
+				log("VPN finished, retry count=" + connectionRetry + "/" + connectionRetryMax);
+			}
+
+			setState(STATE_DISCONNECTED);
+
+			synchronized (mMainloopLock) {
+				mOC.destroy();
+				mOC = null;
+			}
+			UserDialog.clearDeferredPrefs();
+
+			synchronized (mMainloopLock) {
+				try {
+					mMainloopLock.wait(1000);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+			}
+			connectionRetry++;
+		}
+
+
+
+		try {
+			if(mParFDDup != null) {
+				mParFDDup.close();
+			}
+		} catch (IOException e) {
+		}
+		try {
+			if(mParFD != null) {
+				mParFD.close();
+			}
+		} catch (IOException e) {
+		}
+
+		mParFD = null;
+		mParFDDup = null;
 
 		mOpenVPNService.threadDone();
 	}
@@ -541,8 +679,9 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 		return true;
 	}
 
-	private void addDefaultRoutes(VpnService.Builder b, LibOpenConnect.IPInfo ip, ArrayList<String> subnets) {
+	private String addDefaultRoutes(VpnService.Builder b, LibOpenConnect.IPInfo ip, ArrayList<String> subnets) {
 		boolean ip4def = true, ip6def = true;
+		String addedRoutes = "";
 
 		for (String s : subnets) {
 			if (s.contains(":")) {
@@ -554,16 +693,21 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 
 		if (ip4def && ip.addr != null) {
 			b.addRoute("0.0.0.0", 0);
+			addedRoutes += "(ROUTE4:default)";
 			log("ROUTE: 0.0.0.0/0");
 		}
 
 		if (ip6def && ip.netmask6 != null) {
 			b.addRoute("::", 0);
+			addedRoutes += "(ROUTE6:default)";
 			log("ROUTE: ::/0");
 		}
+
+		return addedRoutes;
 	}
 
-	private void addSubnetRoutes(VpnService.Builder b, LibOpenConnect.IPInfo ip, ArrayList<String> subnets) {
+	private String addSubnetRoutes(VpnService.Builder b, LibOpenConnect.IPInfo ip, ArrayList<String> subnets) {
+		String addedRoutes = "";
 		for (String s : subnets) {
 			s = s.trim();
 			try {
@@ -571,8 +715,10 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 					String ss[] = s.split("/");
 					if (ss.length == 1) {
 						b.addRoute(ss[0], 128);
+						addedRoutes += "(ROUTE6:"+ss[0]+")";
 					} else {
 						b.addRoute(ss[0], Integer.parseInt(ss[1]));
+						addedRoutes += "(ROUTE6:"+ss[0]+":"+ss[1]+")";
 					}
 					log("ROUTE: " + s);
 				} else {
@@ -583,24 +729,29 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 						cdr = new CIDRIP(s);
 					}
 					b.addRoute(cdr.mIp, cdr.len);
+					addedRoutes += "(ROUTE4:"+cdr.mIp+":"+cdr.len+")";
 					log("ROUTE: " + cdr.mIp + "/" + cdr.len);
 				}
 			} catch (Exception e) {
 				log("ROUTE: skipping invalid route '" + s + "'");
 			}
 		}
+
+		return addedRoutes;
 	}
 
-	private void setIPInfo(VpnService.Builder b) {
+	private String setIPInfo(VpnService.Builder b) {
 		LibOpenConnect.IPInfo ip = mOC.getIPInfo();
 		CIDRIP cdr;
 		int minMtu = 576;
+		String ifConfig = "";
 
 		/* IP + MTU */
 
 		if (ip.addr != null && ip.netmask != null) {
 			cdr = new CIDRIP(ip.addr, ip.netmask);
 			b.addAddress(cdr.mIp, cdr.len);
+			ifConfig += "(IP4:"+cdr.mIp+":"+cdr.len+")";
 			log("IPv4: " + cdr.mIp + "/" + cdr.len);
 		}
 		if (ip.netmask6 != null) {
@@ -608,6 +759,7 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 			if (ss.length == 2) {
 				int netmask = Integer.parseInt(ss[1]);
 				b.addAddress(ss[0], netmask);
+				ifConfig += "(IP6:"+ss[0]+":"+netmask+")";
 				log("IPv6: " + ip.netmask6);
 				/* RFC 2460 */
 				minMtu = 1280;
@@ -624,9 +776,11 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 
 		if (ip.MTU < minMtu) {
 			b.setMtu(minMtu);
+			ifConfig += "(MTU:"+minMtu+")";
 			log("MTU: " + minMtu + " (forced)");
 		} else {
 			b.setMtu(ip.MTU);
+			ifConfig += "(MTU:"+ip.MTU+")";
 			log("MTU: " + ip.MTU);
 		}
 
@@ -643,14 +797,13 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 			domain = null;
 		} else {
 			subnets = ip.splitIncludes;
-			addDefaultRoutes(b, ip, subnets);
+			ifConfig += addDefaultRoutes(b, ip, subnets);
 		}
-		addSubnetRoutes(b, ip, subnets);
+		ifConfig += addSubnetRoutes(b, ip, subnets);
 
 		/* DNS */
 
 		for (String s : dns) {
-			s = s.trim();
 			try {
 				b.addDnsServer(s);
 				b.addRoute(s, s.contains(":") ? 128 : 32);
@@ -658,19 +811,30 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 			} catch (Exception e) {
 				log("DNS: skipping invalid server '" + s + "'");
 			}
+			ifConfig += "(DNS:"+s+")";
+			log("DNS: " + s);
 		}
 		if (domain != null) {
 			b.addSearchDomain(domain);
+			ifConfig += "(DOMAIN:"+domain+")";
 			log("DOMAIN: " + domain);
 		}
 
 		mOpenVPNService.setIPInfo(ip, mOC.getHostname(), mOC.getIdleTimeout());
+
+		return ifConfig;
 	}
 
+	private boolean silenceFatalError = false;
+
 	private void errorAlert(String message) {
-		mOpenVPNService.promptUser(new ErrorDialog(mPrefs,
-				mContext.getString(R.string.error_connection_failed),
-				message));
+		if(!silenceFatalError) {
+			mOpenVPNService.promptUser(new ErrorDialog(mPrefs,
+					mContext.getString(R.string.error_connection_failed),
+					message));
+		} else {
+			log("ERROR: "+message);
+		}
 	}
 
 	private void errorAlert() {
@@ -700,6 +864,13 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 			log("Error writing curl wrapper scripts");
 		}
 	}
+
+	private int connectionRetry;
+	private int connectionRetryMax;
+
+	private String mCurrentIfConfig = null;
+	private ParcelFileDescriptor mParFD = null;
+	private ParcelFileDescriptor mParFDDup = null;
 
 	private boolean runVPN() {
 		updateStatPref("attempt");
@@ -755,29 +926,41 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 			return false;
 		}
 
-		VpnService.Builder b = mOpenVPNService.getVpnServiceBuilder();
-		setIPInfo(b);
 
-		ParcelFileDescriptor pfd;
-		try {
-			pfd = b.establish();
-		} catch (Exception e) {
-			log("Exception during establish(): " + e.getLocalizedMessage());
-			return false;
+		if(mParFD == null) {
+			if(replaceTunFd(getBuilder(true))) {
+				log("Error setting up tunnel fd");
+				errorAlert();
+				return false;
+			}
+		} else {
+			VpnService.Builder b = getBuilder(false);
+			
+			if(b == null) {
+				if(!updateOCTunFD()) {
+					log("Cannot update tun fd");
+					errorAlert();
+					return false;
+				}
+			} else {
+				if(!replaceTunFd(b)) {
+					log("Cannot replace tun fd");
+					errorAlert();
+					return false;
+				}
+			}
 		}
 
-		if (pfd == null || mOC.setupTunFD(pfd.getFd()) != 0) {
-			log("Error setting up tunnel fd");
-			errorAlert();
-			return false;
-		}
 		setState(STATE_CONNECTED);
 		updateStatPref("connect");
 
 		mOC.setupDTLS(60);
 
 		while (true) {
-			if (mOC.mainloop(300, LibOpenConnect.RECONNECT_INTERVAL_MIN) < 0) {
+			connectionRetry = 0;
+			int res = mOC.mainloop(300, LibOpenConnect.RECONNECT_INTERVAL_MIN);
+			log("Mainloop result="+res);
+			if (res < 0) {
 				break;
 			}
 			synchronized (mMainloopLock) {
@@ -794,11 +977,26 @@ public class OpenConnectManagementThread implements Runnable, OpenVPNManagement 
 			}
 		}
 
-		try {
-			pfd.close();
-		} catch (IOException e) {
-		}
 		return true;
+	}
+
+	private VpnService.Builder getBuilder(boolean force) {
+		VpnService.Builder b = mOpenVPNService.getVpnServiceBuilder();
+		String newIfConfig = setIPInfo(b);
+
+		log("IFConfig: "+newIfConfig);
+
+		if(force) {
+			mCurrentIfConfig = newIfConfig;
+			return b;
+		} else if(newIfConfig.equals(mCurrentIfConfig)) {
+            log("DEBUG: Same interface configuration, continue with same tun");
+			return null;
+        } else {
+            log("WARN: Replacing tun device due to new configuration");
+			mCurrentIfConfig = newIfConfig;
+			return b;
+        }
 	}
 
 	public void reconnect() {

@@ -40,9 +40,11 @@ import android.os.Bundle;
 public class GrantPermissionsActivity extends Activity {
 	public static final String EXTRA_START_ACTIVITY = ".start_activity";
 	public static final String EXTRA_UUID = ".UUID";
+	public static final String EXTRA_ONBOOT = ".onBoot";
 
 	private String mUUID;
 	private String mStartActivity;
+	private boolean mOnBoot;
 
 	private void reportBadRom(Exception e) {
 		ACRAConfiguration cfg = ACRA.getConfig();
@@ -66,6 +68,7 @@ public class GrantPermissionsActivity extends Activity {
 			return;
 		}
 		mStartActivity = myIntent.getStringExtra(getPackageName() + EXTRA_START_ACTIVITY);
+		mOnBoot = myIntent.getBooleanExtra(getPackageName() + EXTRA_ONBOOT, false);
 
 		Intent prepIntent;
 		try {
@@ -98,6 +101,7 @@ public class GrantPermissionsActivity extends Activity {
 		if (resultCode == RESULT_OK) {
 	    	Intent intent = new Intent(getBaseContext(), OpenVpnService.class);
 	    	intent.putExtra(OpenVpnService.EXTRA_UUID, mUUID);
+		intent.putExtra(OpenVpnService.EXTRA_ONBOOT, mOnBoot);
 	    	startService(intent);
 
 	    	if (mStartActivity != null) {

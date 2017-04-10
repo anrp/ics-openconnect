@@ -83,6 +83,7 @@
     <string name="netchange_summary">Turning this option on will force a reconnect if the network state is changed (e.g. WiFi to/from mobile)</string>
     <string name="netchange">Reconnect on network change</string>
     <string name="netstatus">Network Status:</string>
+    <string name="toggle_timestamps">Toggle timestamps (anrp)</string>
     <string name="uptime">Uptime:</string>
     <string name="tx">TX:</string>
     <string name="rx">RX:</string>
@@ -97,6 +98,8 @@
     <string name="setting_loadtun">Load tun module</string>
     <string name="trace_log_summary">Increase logging verbosity for debugging purposes. This will affect performance.</string>
     <string name="trace_log">Enable TRACE logging</string>
+    <string name="restart_vpn_on_boot_summary">Restart the last connected profile on boot</string>
+    <string name="restart_vpn_on_boot">Restart on boot</string>
     <string name="getproxy_error">Error getting proxy settings: %s</string>
     <string name="no_vpn_profiles_defined">No VPN profiles defined.</string>
     <string name="add_new_vpn_hint">Use the &lt;img src=\"ic_menu_add\"/&gt; icon to add a new VPN</string>
@@ -163,6 +166,8 @@
     <string name="not_required">Not required</string>
     <string name="unknown">Unknown</string>
     <string name="batch_mode">Batch mode</string>
+    <string name="autoreconnect">Auto-reconnect attempts</string>
+    <string name="autoreconnect_message">Number of times to attempt reconnect in a fatal situation (cookie invalid, port closed, host unreachable, etc.) -1 to retry forever.</string>
     <string name="reported_os">Reported OS</string>
     <string name="reported_user_agent_override">Override reported User-Agent</string>
     <string name="reported_user_agent_override_summary">Use a custom HTTP User-Agent header, instead of OpenConnect\'s default; some servers are picky about this value.</string>

@@ -58,6 +58,8 @@ public class OnBootReceiver extends BroadcastReceiver {
 		Intent startVpnIntent = new Intent(context, GrantPermissionsActivity.class);
 		startVpnIntent.putExtra(context.getPackageName() + GrantPermissionsActivity.EXTRA_UUID,
 				profile.getUUIDString());
+		startVpnIntent.putExtra(context.getPackageName() + GrantPermissionsActivity.EXTRA_ONBOOT,
+				true);
 		startVpnIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 		//startVpnIntent.putExtra(LogWindow.EXTRA_HIDELOG, true);
 

@@ -64,6 +64,11 @@
                 android:key="trace_log"
                 android:summary="@string/trace_log_summary"
                 android:title="@string/trace_log"/>
+	<CheckBoxPreference
+		android:defaultValue="false"
+		android:key="restartvpnonboot"
+		android:summary="@string/restart_vpn_on_boot_summary"
+		android:title="@string/restart_vpn_on_boot" />
     </PreferenceCategory>
 
 </PreferenceScreen>

@@ -130,5 +130,11 @@
             android:dialogMessage="@string/dpd_value_message"
             android:inputType="number"
             android:defaultValue="" />
+	<EditTextPreference
+	    android:key="autoreconnect"
+	    android:title="@string/autoreconnect"
+	    android:dialogMessage="@string/autoreconnect_message"
+	    android:inputType="numberSigned"
+	    android:defaultValue="0" />
     </PreferenceCategory>
 </PreferenceScreen>

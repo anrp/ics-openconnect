@@ -64,6 +64,7 @@ public class OpenVpnService extends VpnService {
 	public static final String ACTION_VPN_STATUS = "app.openconnect.VPN_STATUS";
 	public static final String EXTRA_CONNECTION_STATE = "app.openconnect.connectionState";
 	public static final String EXTRA_UUID = "app.openconnect.UUID";
+	public static final String EXTRA_ONBOOT = "app.openconnect.onBoot";
 
 	// These are valid in the CONNECTED state
 	public VpnProfile profile;
@@ -252,6 +253,7 @@ public class OpenVpnService extends VpnService {
 			return START_NOT_STICKY;
 		}
 		mPrefs.edit().putString("service_mUUID", mUUID).apply();
+		boolean onBoot = intent.getBooleanExtra(EXTRA_ONBOOT, false);
 
 		profile = ProfileManager.get(mUUID);
 		if (profile == null) {
@@ -264,7 +266,7 @@ public class OpenVpnService extends VpnService {
 		// stopSelfResult(previous_startId) will not
 		mStartId = startId;
 
-        mVPN = new OpenConnectManagementThread(getApplicationContext(), profile, this);
+        mVPN = new OpenConnectManagementThread(getApplicationContext(), profile, this, onBoot);
         mVPNThread = new Thread(mVPN, "OpenVPNManagementThread");
         mVPNThread.start();
 
