@@ -110,7 +110,7 @@ $(ARCH_OC_TARGETS) : %/libopenconnect.so : .openconnect-sources
 	rm -rf $*/openconnect
 	mkdir -p $*/openconnect
 	cp -a openconnect $*/
-	$(MAKE) -C $*/openconnect/android ARCH=$* NDK=$(ANDROID_NDK)
+	$(MAKE) -C $*/openconnect/android ARCH=$* NDK=$(ANDROID_NDK) EXTRA_LDFLAGS=-lz
 	cp -Lf $*/openconnect/android/$(TRIPLET_$*)/out/lib/libopenconnect.so $@
 	cp -f $*/openconnect/android/$(TRIPLET_$*)/out/sbin/run_pie $*/
 
@@ -122,6 +122,7 @@ $(ARCH_OC_TARGETS) : %/libopenconnect.so : .openconnect-sources
 # GnuTLS/nettle into the sysroot for us
 $(ARCH_TOOLCHAIN_TARGETS) : %/toolchain/.installed : %/libopenconnect.so
 	ln -sf openconnect/android/$(TRIPLET_$*)/toolchain $*/
+	sed -e '/ANDROID_API.*17/d' $*/toolchain/sysroot/usr/include/sys/mman.h
 	touch $@
 
 openconnect-wrapper.jar:
